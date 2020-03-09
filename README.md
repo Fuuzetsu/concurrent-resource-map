@@ -1,4 +1,4 @@
-# concurrent-resource-map
+# concurrent-resource-map [![Build Status](https://travis-ci.com/Fuuzetsu/concurrent-resource-map.svg?branch=master)](https://travis-ci.com/Fuuzetsu/concurrent-resource-map)
 
 User-counted resource map with automatic resource collection, aimed to
 be used in concurrent setting.
