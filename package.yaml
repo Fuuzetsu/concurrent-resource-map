@@ -17,10 +17,10 @@ category:            Data
 # complications of embedding Haddock markup inside cabal files, it is
 # common to point users to the README.md file.
 description:         Please see the README on GitHub at <https://github.com/Fuuzetsu/concurrent-resource-map#readme>
-tested-with: GHC ==8.10.1 || ==8.8.3 || ==8.6.3 || ==8.4.4 || ==8.2.2 || ==8.0.2 || ==7.10.3 || ==7.8.4 || ==7.6.3 || ==7.4.2 || ==7.0.4
+tested-with: GHC ==8.10.1 || ==8.8.3 || ==8.6.3 || ==8.4.4 || ==8.2.2 || ==8.0.2 || ==7.10.3
 
 dependencies:
-- base >= 4.7 && < 5
+- base >= 4.8 && < 5
 
 library:
   source-dirs: src
@@ -40,3 +40,5 @@ tests:
     - -with-rtsopts=-N
     dependencies:
     - concurrent-resource-map
+    - random
+    - stm
