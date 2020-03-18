@@ -7,7 +7,7 @@ cabal-version: 1.12
 -- hash: 88961aac04b5bb12c97a5cb17d6ffa38769426d569c941425645c1799284d0f3
 
 name:           concurrent-resource-map
-version:        0.1.0.0
+version:        0.2.0.0
 synopsis:       Concurrent resource map
 description:    Please see the README on GitHub at <https://github.com/Fuuzetsu/concurrent-resource-map#readme>
 category:       Data
