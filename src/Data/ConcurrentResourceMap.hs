@@ -1,6 +1,7 @@
 module Data.ConcurrentResourceMap
   ( ConcurrentResourceMap
   , newResourceMap
+  , withInitialisedResource
   , withSharedResource
   ) where
 
@@ -67,7 +68,7 @@ withSharedResource
   -- blocking other threads from running initialisation again until
   -- you've cleaned up the resource yourself.
   -> (r -> IO a)
-  -- ^ Run an actionwith the initialised resource. Note that the
+  -- ^ Run an action with the initialised resource. Note that the
   -- availability of this resource only ensures that the user-given
   -- initialisers/destructors have been ran appropriate number of
   -- times: it of course makes no guarantees as to what the resource
@@ -94,6 +95,61 @@ withSharedResource vm k initResource destroyResource act = bracket
           return (cr, r)
       act r
 
+
+-- | This is like 'withSharedResource' but will only execute the user
+-- action if the resource already exists. This is useful if you create
+-- your resources in one place but would like to use them
+-- conditionally in another place if they are still alive.
+--
+-- Action is given Nothing if the resource does not exist or is not
+-- initialised.
+withInitialisedResource
+  :: Ord k
+  => ConcurrentResourceMap k r
+  -- ^ Resource map. Create with 'newResourceMap'.
+  -> k
+   -- ^ Key for the resource. This allows you to have many of the same
+   -- type of resource but separated: for example, one group of
+   -- threads could be holding onto a logging handle to syslog while
+   -- another could be holding a handle to a file.
+  -> (r -> IO ())
+  -- ^ Destroy the resource if it was initialised. Ran by last alive
+  -- user when it's exiting. Unlike initialisation, this _is_ ran in
+  -- masked context. If this action fails (by throwing an exception
+  -- itself), the resource will be assumed to be uninitialised and the
+  -- exception will be re-thrown.
+  --
+  -- Therefore, if your cleanup can fail in a way that you have to
+  -- know about/recover from, you should catch exceptions coming out
+  -- out 'withSharedResource'. As you get reference to the resource
+  -- in the @act@, you're able to store it/monitor it yourself and
+  -- decide to take any appropriate actions in the future such as
+  -- blocking other threads from running initialisation again until
+  -- you've cleaned up the resource yourself.
+  -> (Maybe r -> IO a)
+  -- ^ Run an action with the resource. Note that the availability of
+  -- this resource only ensures that the user-given
+  -- initialisers/destructors have been ran appropriate number of
+  -- times: it of course makes no guarantees as to what the resource
+  -- represents. For example, if it's a 'System.Process.ProcessHandle'
+  -- or a database connection, there's no guarantee that the process
+  -- is alive or that the database connection is still available. For
+  -- resources that can dynamically fail, you should implement some
+  -- sort of monitoring yourself.
+  -> IO a
+withInitialisedResource vm k destroyResource act = bracket
+  (addUserIfPresent vm k)
+  removeUserIfPresent
+  actWithResource
+  where
+    removeUserIfPresent Nothing = pure ()
+    removeUserIfPresent (Just rvar) = removeUser vm k destroyResource rvar
+
+    actWithResource Nothing = act Nothing
+    actWithResource (Just rvar) = MVar.readMVar rvar >>= \cr -> case cr of
+        CountedResource { resource = Initialised r } -> act (Just r)
+        _ -> act Nothing
+
 -- | Adds a user at given key. If it's the first user, creates the
 -- underlying map.
 --
@@ -113,6 +169,24 @@ addUser (C vm) k = MVar.modifyMVar vm $ \m -> case Map.lookup k m of
     MVar.modifyMVar_ vc $ \cr ->
       return cr { users = users cr + 1 }
     return (m, vc)
+
+
+-- | Adds a user at given key but only if the given key already exists..
+--
+-- Should be used as initialising action in 'bracket' along with
+-- 'removeUser'.
+addUserIfPresent
+    :: Ord k
+    => ConcurrentResourceMap k r -> k -> IO (Maybe (MVar (CountedResource r)))
+addUserIfPresent (C vm) k = MVar.modifyMVar vm $ \m -> case Map.lookup k m of
+  -- We're the first user of this resource, make the counted
+  -- resource.
+  Nothing -> return (m, Nothing)
+  -- Other users already exist, increase the count only.
+  Just vc -> do
+    MVar.modifyMVar_ vc $ \cr ->
+      return cr { users = users cr + 1 }
+    return (m, Just vc)
 
 -- | Remove user for the given key. If it's the last user, removes the
 -- counted resource from the map completely.

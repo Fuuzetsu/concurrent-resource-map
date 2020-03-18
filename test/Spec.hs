@@ -48,16 +48,23 @@ main = do
 
   replicateM_ numThreads $ forkIO $ do
     let act [] = return ()
-        act ((k, sir):ss) = withSharedResource m k
-          (fragileInit sir >> return sir)
-          (\r -> smallDelay >> destroySIR r)
-          -- Introduce small delay to allow for resource contention
-          -- instead of most threads executing instantly creating a fairly
-          -- sequenential test scenario.
-          --
-          -- Further, this tests that we can nest withSharedResource.
-          (\r -> smallDelay >> checkInitialised r >> act ss)
-        -- Always modify thread exit count when main action finishes.
+        act ((k, sir):ss) = do
+          -- Third of the time, use withInitialisedResource instead.
+          withResource <- do
+            useWithInitialised <- fmap (== 1) $ randomRIO (1, 3 :: Int)
+            pure $ if useWithInitialised
+              then \m k i d r -> withInitialisedResource m k d (mapM_ r)
+              else withSharedResource
+          withResource m k
+            (fragileInit sir >> return sir)
+            (\r -> smallDelay >> destroySIR r)
+            -- Introduce small delay to allow for resource contention
+            -- instead of most threads executing instantly creating a fairly
+            -- sequenential test scenario.
+            --
+            -- Further, this tests that we can nest withSharedResource.
+            (\r -> smallDelay >> checkInitialised r >> act ss)
+            -- Always modify thread exit count when main action finishes.
 
         actIncr = act sirs `finally` atomically (modifyTVar' leftThreads pred)
         -- Silence intentional failures, no need to pollute test
