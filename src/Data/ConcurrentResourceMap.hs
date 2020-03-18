@@ -1,5 +1,8 @@
+{-# LANGUAGE MultiParamTypeClasses #-}
+{-# LANGUAGE TypeFamilies #-}
 module Data.ConcurrentResourceMap
   ( ConcurrentResourceMap
+  , ResourceMap(..)
   , newResourceMap
   , withInitialisedResource
   , withSharedResource
@@ -8,8 +11,6 @@ module Data.ConcurrentResourceMap
 import Control.Exception
 import qualified Control.Concurrent.MVar as MVar
 import Control.Concurrent.MVar (MVar)
-import qualified Data.Map.Strict as Map
-import Data.Map.Strict (Map)
 
 data Resource r = Uninitialised | Initialised !r
 
@@ -21,13 +22,24 @@ data CountedResource r = CountedResource
   , resource :: !(Resource r)
   }
 
+-- | Resource maps should implement this small set of operations that
+-- we expect maps to have.
+--
+-- This allows you to use whatever fast underlying map type you'd
+-- like, depending on your resources.
+class ResourceMap m where
+  type Key m :: *
+  empty :: m v
+  delete :: Key m -> m v -> m v
+  insert :: Key m -> v -> m v -> m v
+  lookup :: Key m -> m v -> Maybe v
+
 -- | A map of shared resources @r@ keyed by @k@.
-newtype ConcurrentResourceMap k r = C
-  (MVar (Map k (MVar (CountedResource r))))
+newtype ConcurrentResourceMap m v = C (MVar (m (MVar (CountedResource v))))
 
 -- | Create an empty resource map.
-newResourceMap :: Ord k => IO (ConcurrentResourceMap k r)
-newResourceMap = fmap C $ MVar.newMVar Map.empty
+newResourceMap :: ResourceMap m => IO (ConcurrentResourceMap m r)
+newResourceMap = fmap C $ MVar.newMVar Data.ConcurrentResourceMap.empty
 
 -- | Use a resource that can be accessed concurrently via multiple
 -- threads but is only initialised and destroyed on as-needed basis.
@@ -39,10 +51,10 @@ newResourceMap = fmap C $ MVar.newMVar Map.empty
 -- 'withSharedResource' in a nested matter on same resource key should
 -- have no real adverse effects either.
 withSharedResource
-  :: Ord k
-  => ConcurrentResourceMap k r
+  :: ResourceMap m
+  => ConcurrentResourceMap m r
   -- ^ Resource map. Create with 'newResourceMap'.
-  -> k
+  -> Key m
    -- ^ Key for the resource. This allows you to have many of the same
    -- type of resource but separated: for example, one group of
    -- threads could be holding onto a logging handle to syslog while
@@ -104,10 +116,10 @@ withSharedResource vm k initResource destroyResource act = bracket
 -- Action is given Nothing if the resource does not exist or is not
 -- initialised.
 withInitialisedResource
-  :: Ord k
-  => ConcurrentResourceMap k r
+  :: ResourceMap m
+  => ConcurrentResourceMap m r
   -- ^ Resource map. Create with 'newResourceMap'.
-  -> k
+  -> Key m
    -- ^ Key for the resource. This allows you to have many of the same
    -- type of resource but separated: for example, one group of
    -- threads could be holding onto a logging handle to syslog while
@@ -156,14 +168,14 @@ withInitialisedResource vm k destroyResource act = bracket
 -- Should be used as initialising action in 'bracket' along with
 -- 'removeUser'.
 addUser
-    :: Ord k
-    => ConcurrentResourceMap k r -> k -> IO (MVar (CountedResource r))
-addUser (C vm) k = MVar.modifyMVar vm $ \m -> case Map.lookup k m of
+    :: ResourceMap m
+    => ConcurrentResourceMap m r -> Key m -> IO (MVar (CountedResource r))
+addUser (C vm) k = MVar.modifyMVar vm $ \m -> case Data.ConcurrentResourceMap.lookup k m of
   -- We're the first user of this resource, make the counted
   -- resource.
   Nothing -> do
     v <- MVar.newMVar CountedResource { users = 1, resource = Uninitialised }
-    return (Map.insert k v m, v)
+    return (Data.ConcurrentResourceMap.insert k v m, v)
   -- Other users already exist, increase the count only.
   Just vc -> do
     MVar.modifyMVar_ vc $ \cr ->
@@ -176,9 +188,11 @@ addUser (C vm) k = MVar.modifyMVar vm $ \m -> case Map.lookup k m of
 -- Should be used as initialising action in 'bracket' along with
 -- 'removeUser'.
 addUserIfPresent
-    :: Ord k
-    => ConcurrentResourceMap k r -> k -> IO (Maybe (MVar (CountedResource r)))
-addUserIfPresent (C vm) k = MVar.modifyMVar vm $ \m -> case Map.lookup k m of
+    :: ResourceMap m
+    => ConcurrentResourceMap m r
+    -> Key m
+    -> IO (Maybe (MVar (CountedResource r)))
+addUserIfPresent (C vm) k = MVar.modifyMVar vm $ \m -> case Data.ConcurrentResourceMap.lookup k m of
   -- We're the first user of this resource, make the counted
   -- resource.
   Nothing -> return (m, Nothing)
@@ -193,9 +207,9 @@ addUserIfPresent (C vm) k = MVar.modifyMVar vm $ \m -> case Map.lookup k m of
 --
 -- Should be used as cleanup action in 'bracket' along with 'addUser'.
 removeUser
-  :: Ord k
-  => ConcurrentResourceMap k r
-  -> k
+  :: ResourceMap m
+  => ConcurrentResourceMap m r
+  -> Key m
   -- ^ The resource from inside the map.
   -> (r -> IO ())
   -- ^ Destroy resource.
@@ -224,7 +238,7 @@ removeUser (C vm) k destroyResource vc = do
     -- around, simply replace the content with updated user counter.
     _ -> MVar.putMVar vc cr'
   where
-    cleanFromResourceMap = MVar.modifyMVar_ vm $ \m -> case Map.lookup k m of
+    cleanFromResourceMap = MVar.modifyMVar_ vm $ \m -> case Data.ConcurrentResourceMap.lookup k m of
       -- The resource is not even in the map anymore. This could
       -- happen if since we decreased the count, a new user came in,
       -- increased the count, finished and cleaned up before we did.
@@ -239,7 +253,8 @@ removeUser (C vm) k destroyResource vc = do
           -- only user holding a useful reference to the MVar as it
           -- can only be created and passed from addUser and it's
           -- internal API. Remove it from the map.
-          Just CountedResource { users = 0 } -> return (Map.delete k m)
+          Just CountedResource { users = 0 } ->
+            return (Data.ConcurrentResourceMap.delete k m)
           -- We were able to take the MVar but there are some other
           -- users around again: we want to keep the original map. Put
           -- the value back and keep original the original mapping.

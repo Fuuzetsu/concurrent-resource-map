@@ -1,3 +1,4 @@
+{-# LANGUAGE TypeFamilies #-}
 module Main (main) where
 
 import Control.Concurrent
@@ -6,6 +7,7 @@ import Control.Exception
 import Control.Monad
 import Data.ConcurrentResourceMap
 import Data.IORef
+import qualified Data.IntMap.Strict as IntMap
 import Data.Typeable
 import System.Random
 
@@ -40,9 +42,18 @@ data IntentionalFailure = IntentionalFailure
   deriving (Typeable, Show)
 instance Exception IntentionalFailure
 
+newtype SirMap v = M (IntMap.IntMap v)
+
+instance ResourceMap SirMap where
+  type Key SirMap = Int
+  empty = M IntMap.empty
+  delete k (M m) = M (IntMap.delete k m)
+  insert k v (M m) = M (IntMap.insert k v m)
+  lookup k (M m) = IntMap.lookup k m
+
 main :: IO ()
 main = do
-  m <- newResourceMap
+  m <- newResourceMap :: IO (ConcurrentResourceMap SirMap SingleInitResource)
   leftThreads <- newTVarIO numThreads
   sirs <- fmap (zip [0 :: Int .. ]) $ replicateM 10 newSIR
 
