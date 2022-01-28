@@ -4,6 +4,7 @@ module Data.ConcurrentResourceMap
   ( ConcurrentResourceMap
   , ResourceMap(..)
   , newResourceMap
+  , keysResourceMap
   , withInitialisedResource
   , withSharedResource
   ) where
@@ -33,6 +34,7 @@ class ResourceMap m where
   delete :: Key m -> m v -> m v
   insert :: Key m -> v -> m v -> m v
   lookup :: Key m -> m v -> Maybe v
+  keys :: m v -> [Key m]
 
 -- | A map of shared resources @r@ keyed by @k@.
 newtype ConcurrentResourceMap m v = C (MVar (m (MVar (CountedResource v))))
@@ -40,6 +42,16 @@ newtype ConcurrentResourceMap m v = C (MVar (m (MVar (CountedResource v))))
 -- | Create an empty resource map.
 newResourceMap :: ResourceMap m => IO (ConcurrentResourceMap m r)
 newResourceMap = fmap C $ MVar.newMVar Data.ConcurrentResourceMap.empty
+
+-- | Obtain a snapshot of the list of keys.
+-- This function can be used to signal all the acquired resources,
+-- e.g. when you want to close the resource map entirely.
+-- Note that it has nothing to do with subsequent insertions
+-- because this function merely takes a snapshot.
+-- Some external synchronisation is needed if you want to make guarantees
+-- on _all_ the resources.
+keysResourceMap :: ResourceMap m => ConcurrentResourceMap m v -> IO [Key m]
+keysResourceMap (C mv) = keys <$> MVar.readMVar mv
 
 -- | Use a resource that can be accessed concurrently via multiple
 -- threads but is only initialised and destroyed on as-needed basis.
